@@ -1,0 +1,476 @@
+-- =============================================================================
+-- schema_setup.sql
+-- Creates the full Snowflake object hierarchy for the retail_dwh_pipeline.
+--
+-- Execution order matters — run top to bottom exactly once.
+-- After running this file, upload your CSV to the internal stage, then
+-- execute run_pipeline.py.
+--
+-- Layers
+--   LANDING  — raw CSV data, no transformations
+--   STAGE    — views that clean & reshape the landing data
+--   TEMP     — scratch tables used during each pipeline run
+--   TARGET   — final SCD2 dimension tables + fact table
+-- =============================================================================
+
+
+-- -----------------------------------------------------------------------------
+-- DATABASE & SCHEMAS
+-- -----------------------------------------------------------------------------
+
+CREATE DATABASE IF NOT EXISTS RETAIL_DB;
+
+CREATE SCHEMA IF NOT EXISTS RETAIL_DB.LANDING;
+CREATE SCHEMA IF NOT EXISTS RETAIL_DB.STAGE;
+CREATE SCHEMA IF NOT EXISTS RETAIL_DB.TEMP;
+CREATE SCHEMA IF NOT EXISTS RETAIL_DB.TARGET;
+
+USE DATABASE RETAIL_DB;
+
+
+-- -----------------------------------------------------------------------------
+-- INTERNAL STAGE  (CSV files are PUT here before pipeline runs)
+-- -----------------------------------------------------------------------------
+
+CREATE STAGE IF NOT EXISTS LANDING.CSV_STAGE
+    COMMENT = 'Internal stage for raw retail sales CSV files'
+    FILE_FORMAT = (
+        TYPE                        = CSV
+        FIELD_DELIMITER             = ','
+        SKIP_HEADER                 = 1
+        FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+        TRIM_SPACE                  = TRUE
+        NULL_IF                     = ('NULL', 'null', '')
+    );
+
+
+-- -----------------------------------------------------------------------------
+-- LANDING LAYER — raw, untyped columns from CSV
+-- -----------------------------------------------------------------------------
+
+CREATE OR REPLACE TABLE LANDING.RAW_SALES (
+     ROW_ID        VARCHAR
+    ,ORDER_ID      VARCHAR
+    ,ORDER_DATE    VARCHAR
+    ,SHIP_DATE     VARCHAR
+    ,SHIP_MODE     VARCHAR
+    ,CUSTOMER_ID   VARCHAR
+    ,CUSTOMER_NAME VARCHAR
+    ,SEGMENT       VARCHAR
+    ,COUNTRY       VARCHAR
+    ,CITY          VARCHAR
+    ,STATE         VARCHAR
+    ,POSTAL_CODE   VARCHAR
+    ,REGION        VARCHAR
+    ,PRODUCT_ID    VARCHAR
+    ,CATEGORY      VARCHAR
+    ,SUB_CATEGORY  VARCHAR
+    ,PRODUCT_NAME  VARCHAR
+    ,SALES         VARCHAR
+    ,QUANTITY      VARCHAR
+    ,DISCOUNT      VARCHAR
+    ,PROFIT        VARCHAR
+);
+
+
+-- -----------------------------------------------------------------------------
+-- STAGE LAYER — views that trim whitespace and cast types
+-- -----------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW STAGE.VW_D_COUNTRY (
+    COUNTRY_NAME
+) AS
+SELECT DISTINCT TRIM(COUNTRY)
+FROM LANDING.RAW_SALES
+WHERE COUNTRY IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_REGION (
+     REGION_NAME
+    ,COUNTRY_NAME
+) AS
+SELECT DISTINCT
+     TRIM(REGION)
+    ,TRIM(COUNTRY)
+FROM LANDING.RAW_SALES
+WHERE REGION IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_STATE (
+     STATE_NAME
+    ,REGION_NAME
+) AS
+SELECT DISTINCT
+     TRIM(STATE)
+    ,TRIM(REGION)
+FROM LANDING.RAW_SALES
+WHERE STATE IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_CITY (
+     CITY_NAME
+    ,POSTAL_CODE
+    ,STATE_NAME
+) AS
+SELECT DISTINCT
+     TRIM(CITY)
+    ,TRIM(POSTAL_CODE)
+    ,TRIM(STATE)
+FROM LANDING.RAW_SALES
+WHERE CITY IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_CATEGORY (
+    CATEGORY_NAME
+) AS
+SELECT DISTINCT TRIM(CATEGORY)
+FROM LANDING.RAW_SALES
+WHERE CATEGORY IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_SUBCATEGORY (
+     SUBCATEGORY_NAME
+    ,CATEGORY_NAME
+) AS
+SELECT DISTINCT
+     TRIM(SUB_CATEGORY)
+    ,TRIM(CATEGORY)
+FROM LANDING.RAW_SALES
+WHERE SUB_CATEGORY IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_PRODUCT (
+     PRODUCT_ID
+    ,PRODUCT_NAME
+    ,SUBCATEGORY_NAME
+) AS
+SELECT DISTINCT
+     TRIM(PRODUCT_ID)
+    ,TRIM(PRODUCT_NAME)
+    ,TRIM(SUB_CATEGORY)
+FROM LANDING.RAW_SALES
+WHERE PRODUCT_ID IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_SEGMENT (
+    SEGMENT_NAME
+) AS
+SELECT DISTINCT TRIM(SEGMENT)
+FROM LANDING.RAW_SALES
+WHERE SEGMENT IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_CUSTOMER (
+     CUSTOMER_ID
+    ,CUSTOMER_NAME
+    ,SEGMENT_NAME
+) AS
+SELECT DISTINCT
+     TRIM(CUSTOMER_ID)
+    ,TRIM(CUSTOMER_NAME)
+    ,TRIM(SEGMENT)
+FROM LANDING.RAW_SALES
+WHERE CUSTOMER_ID IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_D_SHIP_MODE (
+    SHIP_MODE
+) AS
+SELECT DISTINCT TRIM(SHIP_MODE)
+FROM LANDING.RAW_SALES
+WHERE SHIP_MODE IS NOT NULL;
+
+-- -
+
+CREATE OR REPLACE VIEW STAGE.VW_F_SALES (
+     ROW_ID
+    ,ORDER_ID
+    ,ORDER_DATE
+    ,SHIP_DATE
+    ,CUSTOMER_ID
+    ,PRODUCT_ID
+    ,COUNTRY
+    ,REGION
+    ,STATE
+    ,CITY
+    ,POSTAL_CODE
+    ,SHIP_MODE
+    ,QUANTITY
+    ,SALES
+    ,DISCOUNT
+    ,DISCOUNT_AMOUNT
+    ,REVENUE
+    ,PROFIT
+) AS
+SELECT
+     TRIM(ROW_ID)
+    ,TRIM(ORDER_ID)
+    ,TO_DATE(ORDER_DATE, 'MM/DD/YYYY')
+    ,TO_DATE(SHIP_DATE, 'MM/DD/YYYY')
+    ,TRIM(CUSTOMER_ID)
+    ,TRIM(PRODUCT_ID)
+    ,TRIM(COUNTRY)
+    ,TRIM(REGION)
+    ,TRIM(STATE)
+    ,TRIM(CITY)
+    ,TRIM(POSTAL_CODE)
+    ,TRIM(SHIP_MODE)
+    ,TRIM(QUANTITY)::NUMBER
+    ,TRIM(SALES)::FLOAT
+    ,TRIM(DISCOUNT)::FLOAT
+    ,(TRIM(SALES)::FLOAT * TRIM(DISCOUNT)::FLOAT)           AS DISCOUNT_AMOUNT
+    ,(TRIM(SALES)::FLOAT * (1 - TRIM(DISCOUNT)::FLOAT))     AS REVENUE
+    ,TRIM(PROFIT)::FLOAT
+FROM LANDING.RAW_SALES
+WHERE ROW_ID IS NOT NULL;
+
+
+-- -----------------------------------------------------------------------------
+-- TEMP LAYER — staging tables truncated at the start of each pipeline run
+-- -----------------------------------------------------------------------------
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_COUNTRY (
+    COUNTRY_NAME VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_REGION (
+     REGION_NAME  VARCHAR
+    ,COUNTRY_NAME VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_STATE (
+     STATE_NAME  VARCHAR
+    ,REGION_NAME VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_CITY (
+     CITY_NAME   VARCHAR
+    ,POSTAL_CODE VARCHAR
+    ,STATE_NAME  VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_CATEGORY (
+    CATEGORY_NAME VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_SUBCATEGORY (
+     SUBCATEGORY_NAME VARCHAR
+    ,CATEGORY_NAME    VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_PRODUCT (
+     PRODUCT_ID       VARCHAR
+    ,PRODUCT_NAME     VARCHAR
+    ,SUBCATEGORY_NAME VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_SEGMENT (
+    SEGMENT_NAME VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_CUSTOMER (
+     CUSTOMER_ID   VARCHAR
+    ,CUSTOMER_NAME VARCHAR
+    ,SEGMENT_NAME  VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_D_SHIP_MODE (
+    SHIP_MODE VARCHAR
+);
+
+CREATE OR REPLACE TABLE TEMP.TMP_F_SALES (
+     ROW_ID          VARCHAR
+    ,ORDER_ID        VARCHAR
+    ,ORDER_DATE_KEY  NUMBER
+    ,SHIP_DATE_KEY   NUMBER
+    ,CUSTOMER_KEY    NUMBER
+    ,PRODUCT_KEY     NUMBER
+    ,CITY_KEY        NUMBER
+    ,SHIP_MODE_KEY   NUMBER
+    ,QUANTITY        NUMBER
+    ,SALES           FLOAT
+    ,DISCOUNT        FLOAT
+    ,DISCOUNT_AMOUNT FLOAT
+    ,REVENUE         FLOAT
+    ,PROFIT          FLOAT
+);
+
+
+-- -----------------------------------------------------------------------------
+-- TARGET LAYER — SCD2 dimension tables (surrogate keys via AUTOINCREMENT)
+-- -----------------------------------------------------------------------------
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_COUNTRY (
+     COUNTRY_KEY    NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,COUNTRY_NAME   VARCHAR(100)  NOT NULL
+    ,EFF_START_DATE DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE   DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT     BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_REGION (
+     REGION_KEY     NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,REGION_NAME    VARCHAR(100)  NOT NULL
+    ,COUNTRY_KEY    NUMBER        NOT NULL REFERENCES TARGET.TGT_D_COUNTRY(COUNTRY_KEY)
+    ,EFF_START_DATE DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE   DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT     BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_STATE (
+     STATE_KEY      NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,STATE_NAME     VARCHAR(100)  NOT NULL
+    ,REGION_KEY     NUMBER        NOT NULL REFERENCES TARGET.TGT_D_REGION(REGION_KEY)
+    ,EFF_START_DATE DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE   DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT     BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_CITY (
+     CITY_KEY       NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,CITY_NAME      VARCHAR(100)  NOT NULL
+    ,POSTAL_CODE    VARCHAR(20)
+    ,STATE_KEY      NUMBER        NOT NULL REFERENCES TARGET.TGT_D_STATE(STATE_KEY)
+    ,EFF_START_DATE DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE   DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT     BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_CATEGORY (
+     CATEGORY_KEY   NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,CATEGORY_NAME  VARCHAR(100)  NOT NULL
+    ,EFF_START_DATE DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE   DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT     BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_SUBCATEGORY (
+     SUBCATEGORY_KEY  NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,SUBCATEGORY_NAME VARCHAR(100)  NOT NULL
+    ,CATEGORY_KEY     NUMBER        NOT NULL REFERENCES TARGET.TGT_D_CATEGORY(CATEGORY_KEY)
+    ,EFF_START_DATE   DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE     DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT       BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_PRODUCT (
+     PRODUCT_KEY      NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,PRODUCT_ID       VARCHAR(50)   NOT NULL
+    ,PRODUCT_NAME     VARCHAR(300)  NOT NULL
+    ,SUBCATEGORY_KEY  NUMBER        NOT NULL REFERENCES TARGET.TGT_D_SUBCATEGORY(SUBCATEGORY_KEY)
+    ,EFF_START_DATE   DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE     DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT       BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_SEGMENT (
+     SEGMENT_KEY    NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,SEGMENT_NAME   VARCHAR(100)  NOT NULL
+    ,EFF_START_DATE DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE   DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT     BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_CUSTOMER (
+     CUSTOMER_KEY   NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,CUSTOMER_ID    VARCHAR(50)   NOT NULL
+    ,CUSTOMER_NAME  VARCHAR(200)  NOT NULL
+    ,SEGMENT_KEY    NUMBER        NOT NULL REFERENCES TARGET.TGT_D_SEGMENT(SEGMENT_KEY)
+    ,EFF_START_DATE DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE   DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT     BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+CREATE OR REPLACE TABLE TARGET.TGT_D_SHIP_MODE (
+     SHIP_MODE_KEY  NUMBER        AUTOINCREMENT PRIMARY KEY
+    ,SHIP_MODE      VARCHAR(50)   NOT NULL
+    ,EFF_START_DATE DATE          NOT NULL DEFAULT CURRENT_DATE()
+    ,EFF_END_DATE   DATE          NOT NULL DEFAULT '9999-12-31'::DATE
+    ,IS_CURRENT     BOOLEAN       NOT NULL DEFAULT TRUE
+);
+
+-- -
+
+-- Date dimension — not SCD2, populated once via the INSERT below
+CREATE OR REPLACE TABLE TARGET.TGT_D_DATE (
+     DATE_KEY     NUMBER   PRIMARY KEY   -- format YYYYMMDD
+    ,FULL_DATE    DATE     NOT NULL
+    ,YEAR         NUMBER   NOT NULL
+    ,QUARTER      NUMBER   NOT NULL
+    ,MONTH        NUMBER   NOT NULL
+    ,MONTH_NAME   VARCHAR(3)
+    ,WEEK         NUMBER
+    ,DAY          NUMBER   NOT NULL
+    ,DAY_OF_WEEK  NUMBER   NOT NULL      -- 0 = Sunday
+    ,DAY_NAME     VARCHAR(3)
+    ,IS_WEEKEND   BOOLEAN  NOT NULL
+);
+
+-- Populate date dimension: 2020-01-01 through 2030-12-31
+INSERT INTO TARGET.TGT_D_DATE
+SELECT
+     TO_NUMBER(TO_CHAR(d, 'YYYYMMDD'))          AS DATE_KEY
+    ,d                                           AS FULL_DATE
+    ,YEAR(d)                                     AS YEAR
+    ,QUARTER(d)                                  AS QUARTER
+    ,MONTH(d)                                    AS MONTH
+    ,TO_CHAR(d, 'Mon')                           AS MONTH_NAME
+    ,WEEK(d)                                     AS WEEK
+    ,DAY(d)                                      AS DAY
+    ,DAYOFWEEK(d)                                AS DAY_OF_WEEK
+    ,TO_CHAR(d, 'Dy')                            AS DAY_NAME
+    ,IFF(DAYOFWEEK(d) IN (0, 6), TRUE, FALSE)    AS IS_WEEKEND
+FROM (
+    SELECT DATEADD(DAY, SEQ4(), '2020-01-01'::DATE) AS d
+    FROM TABLE(GENERATOR(ROWCOUNT => 4018))         -- covers 2020-01-01 to 2030-12-31
+)
+WHERE d <= '2030-12-31'::DATE;
+
+
+-- -----------------------------------------------------------------------------
+-- FACT TABLE
+-- -----------------------------------------------------------------------------
+
+CREATE OR REPLACE TABLE TARGET.TGT_F_SALES (
+     ROW_ID          VARCHAR(50)  PRIMARY KEY
+    ,ORDER_ID        VARCHAR(50)  NOT NULL
+    ,ORDER_DATE_KEY  NUMBER       NOT NULL REFERENCES TARGET.TGT_D_DATE(DATE_KEY)
+    ,SHIP_DATE_KEY   NUMBER       NOT NULL REFERENCES TARGET.TGT_D_DATE(DATE_KEY)
+    ,CUSTOMER_KEY    NUMBER       NOT NULL REFERENCES TARGET.TGT_D_CUSTOMER(CUSTOMER_KEY)
+    ,PRODUCT_KEY     NUMBER       NOT NULL REFERENCES TARGET.TGT_D_PRODUCT(PRODUCT_KEY)
+    ,CITY_KEY        NUMBER       NOT NULL REFERENCES TARGET.TGT_D_CITY(CITY_KEY)
+    ,SHIP_MODE_KEY   NUMBER       NOT NULL REFERENCES TARGET.TGT_D_SHIP_MODE(SHIP_MODE_KEY)
+    ,QUANTITY        NUMBER       NOT NULL
+    ,SALES           FLOAT        NOT NULL
+    ,DISCOUNT        FLOAT        NOT NULL
+    ,DISCOUNT_AMOUNT FLOAT        NOT NULL
+    ,REVENUE         FLOAT        NOT NULL
+    ,PROFIT          FLOAT        NOT NULL
+);
