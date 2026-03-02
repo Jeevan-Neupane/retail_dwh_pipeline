@@ -7,6 +7,8 @@ from loaders.dim_loaders.category_loader import CategoryLoader
 from loaders.dim_loaders.subcategory_loader import SubcategoryLoader
 from loaders.dim_loaders.segment_loader import SegmentLoader
 from loaders.dim_loaders.ship_mode_loader import ShipModeLoader
+from loaders.dim_loaders.customer_loader import CustomerLoader
+from loaders.dim_loaders.product_loader import ProductLoader
 
 __all__ = [
     "Scd2DimLoader",
@@ -18,4 +20,6 @@ __all__ = [
     "SubcategoryLoader",
     "SegmentLoader",
     "ShipModeLoader",
+    "CustomerLoader",
+    "ProductLoader",
 ]

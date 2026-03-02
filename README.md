@@ -70,7 +70,14 @@ PUT file://path/to/sales.csv @RETAIL_DB.LANDING.CSV_STAGE;
 ### 5. Run the pipeline
 
 ```bash
+# Full pipeline (all 12 steps)
 python run_pipeline.py
+
+# List all step names
+python run_pipeline.py --list
+
+# Resume from a specific step after a failure (skips earlier steps)
+python run_pipeline.py --from city
 ```
 
 ## Star Schema
