@@ -1,98 +1,123 @@
 # Retail Data Warehouse Pipeline
 
-An end-to-end ETL pipeline that ingests retail sales data from CSV files into **Snowflake**, applying **Slowly Changing Dimension Type 2 (SCD2)** logic to all dimension tables to capture full historical changes.
+ETL pipeline that loads retail sales data into Snowflake with SCD2 dimension tracking.
 
-## Architecture
+## Setup
+
+### 1. Prerequisites
+- Python 3.10+
+- Snowflake account
+
+### 2. Install Dependencies
+
+```bash
+python -m venv venv
+.\venv\Scripts\activate          # Windows
+pip install -r requirements.txt
+```
+
+### 3. Configure Snowflake Credentials
+
+Copy `.env.example` to `.env` and fill in your Snowflake credentials:
+
+```bash
+copy .env.example .env           # Windows
+```
+
+Edit `.env`:
+```
+SNOWFLAKE_ACCOUNT=your-account-identifier
+SNOWFLAKE_USER=your-username
+SNOWFLAKE_PASSWORD=your-password
+SNOWFLAKE_WAREHOUSE=COMPUTE_WH
+SNOWFLAKE_DATABASE=RETAIL_DB
+```
+
+### 4. Create Snowflake Schema
+
+In Snowflake UI, select all text from `sql/ddl/schema_setup.sql` and click **Run All**.
+
+This creates:
+- Database: `RETAIL_DB`
+- Schemas: `LANDING`, `STAGE`, `TEMP`, `TARGET`
+- 10 dimension tables (with SCD2)
+- 1 fact table
+- All views and stage
+
+## Run Pipeline
+
+### Step 1: Upload CSV to Snowflake Stage
+
+```bash
+python upload_csv.py
+```
+
+Sample CSV is provided in `data/sample_sales.csv` (20 rows).
+
+### Step 2: Run ETL Pipeline
+
+```bash
+python run_pipeline.py
+```
+
+This executes 12 steps:
+1. Extract CSV → Landing table
+2. Load Country dimension
+3. Load Region dimension
+4. Load State dimension
+5. Load City dimension
+6. Load Category dimension
+7. Load Subcategory dimension
+8. Load Segment dimension
+9. Load Ship Mode dimension
+10. Load Product dimension
+11. Load Customer dimension
+12. Load Sales fact table
+
+## Expected Output
 
 ```
-CSV File
-   │
-   ▼
-Landing Layer   (raw ingestion, no transformation)
-   │
-   ▼
-Stage Layer     (views that clean & reshape landing data)
-   │
-   ▼
-Target Layer    (SCD2 dimension tables + fact table)
+RETAIL DWH PIPELINE — START
+Steps to run: 12
+=================================================================
+[OK] extract           3.2s
+[OK] country           4.5s
+[OK] region            7.1s
+[OK] state             6.9s
+[OK] city              5.1s
+[OK] category          3.9s
+[OK] subcategory       6.1s
+[OK] segment           6.7s
+[OK] ship_mode         8.0s
+[OK] product           7.7s
+[OK] customer         12.9s
+[OK] sales            12.1s
+-----------------------------------------------------------------
+Total: 12 step(s) | Passed: 12 | Failed: 0 | Elapsed: 84.1s
+=================================================================
 ```
 
 ## Project Structure
 
 ```
-├── .env.example            # Template — copy to .env and fill credentials
-├── requirements.txt
-├── run_pipeline.py         # Orchestrates the full pipeline
-├── sql/
-│   └── ddl/
-│       └── schema_setup.sql
-├── utils/
-│   ├── logger.py           # Logging setup (Python logging module)
-│   └── db_connector.py     # Snowflake connection context manager
-├── loaders/
-│   ├── base_loader.py      # Abstract base class for all loaders
-│   ├── extract_loader.py   # CSV → Landing
-│   ├── dim_loaders/        # One file per dimension (SCD2)
-│   └── fact_loaders/       # Fact table loaders
-└── logs/                   # Auto-created at runtime
+retail_dwh_pipeline/
+├── data/                    # Sample CSV file
+├── sql/ddl/                 # Snowflake schema setup
+├── utils/                   # Database connector & logger
+├── loaders/                 # ETL loaders
+│   ├── dim_loaders/        # Dimension loaders (SCD2)
+│   └── fact_loaders/       # Fact table loader
+├── upload_csv.py           # Upload CSV to Snowflake
+└── run_pipeline.py         # Main pipeline orchestrator
 ```
 
-## Setup
+## Troubleshooting
 
-### 1. Clone & install dependencies
+**SSL Certificate Error:**
+The `upload_csv.py` script includes `insecure_mode=True` to bypass SSL validation issues.
 
-```bash
-git clone <repo-url>
-cd retail_dwh_pipeline
-python -m venv venv
-# Windows
-.\venv\Scripts\activate
-pip install -r requirements.txt
-```
+**Schema Not Found:**
+Make sure to run the entire `schema_setup.sql` file using "Run All" in Snowflake UI.
 
-### 2. Configure credentials
-
-```bash
-cp .env.example .env
-# Edit .env with your Snowflake credentials
-```
-
-### 3. Create Snowflake objects
-
-Run `sql/ddl/schema_setup.sql` in your Snowflake worksheet.
-
-### 4. Upload CSV to Snowflake stage
-
-```sql
-PUT file://path/to/sales.csv @RETAIL_DB.LANDING.CSV_STAGE;
-```
-
-### 5. Run the pipeline
-
-```bash
-# Full pipeline (all 12 steps)
-python run_pipeline.py
-
-# List all step names
-python run_pipeline.py --list
-
-# Resume from a specific step after a failure (skips earlier steps)
-python run_pipeline.py --from city
-```
-
-## Star Schema
-
-| Table               | Type      | SCD2 |
-| ------------------- | --------- | ---- |
-| `TGT_D_COUNTRY`     | Dimension | Yes  |
-| `TGT_D_REGION`      | Dimension | Yes  |
-| `TGT_D_STATE`       | Dimension | Yes  |
-| `TGT_D_CITY`        | Dimension | Yes  |
-| `TGT_D_CATEGORY`    | Dimension | Yes  |
-| `TGT_D_SUBCATEGORY` | Dimension | Yes  |
-| `TGT_D_SEGMENT`     | Dimension | Yes  |
-| `TGT_D_SHIP_MODE`   | Dimension | Yes  |
-| `TGT_D_PRODUCT`     | Dimension | Yes  |
-| `TGT_D_CUSTOMER`    | Dimension | Yes  |
-| `TGT_D_DATE`        | Dimension | No   |
-| `TGT_F_SALES`       | Fact      | No   |
+**Pipeline Fails:**
+Check logs in `logs/` directory for detailed error messages.
